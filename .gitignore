@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Data / artifacts (source docs and generated indexes are large / private)
+data/
+storage/
+*.sqlite
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code local (machine-specific settings, permissions allowlist)
+.claude/settings.local.json
+
+# Local service volumes
+docker/volumes/
+neo4j/
+qdrant_storage/

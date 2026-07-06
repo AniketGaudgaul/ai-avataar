@@ -1,0 +1,4 @@
+# Source content lives here (spec 5.1): resume, personal narrative, project
+# write-ups, ECIR paper, achievements, "How I Built This" meta-doc, diagrams.
+# Real content is git-ignored via the data/ rule if it's private; keep only
+# templates/placeholders committed.
