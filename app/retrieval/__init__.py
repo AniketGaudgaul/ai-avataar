@@ -1,3 +1,9 @@
-"""Retrieval layer: hybrid dense+BM25+RRF and graph queries (spec 6). Modules to
-come: hybrid_search, graph_query, rrf_fusion.
+"""Retrieval layer (spec 6): hybrid dense+BM25 search fused with Qdrant's native
+RRF, small-to-big parent expansion, and a Neo4j graph-facts primitive.
+
+- `vector.py` — hybrid retrieval + small-to-big + prompt-ready context assembly
+- `graph.py`  — citable relationship facts for named entities (GraphRAG side)
+
+RRF fusion is done inside Qdrant (see `ingestion.vector.store`), so there is no
+hand-rolled `rrf_fusion` module.
 """

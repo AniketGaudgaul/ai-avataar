@@ -21,11 +21,15 @@ dependencies = [
     # Agent orchestration
     "langgraph>=0.2",
     "langchain-core>=0.3",
+    # Document parsing (vector path) — LlamaParse v2 SDK
+    "llama-cloud>=2.0",
     # Stores
-    "qdrant-client>=1.10",
+    "qdrant-client>=1.14",
     "neo4j>=5.20",
-    # Sparse retrieval
-    "rank-bm25>=0.2.2",
+    # Sparse retrieval — BM25 sparse vectors via Qdrant/fastembed (server-native
+    # hybrid + RRF fusion, not hand-rolled). Replaces the rank_bm25 + manual RRF
+    # the spec originally assumed.
+    "fastembed>=0.8",
     "numpy>=1.26",
 ]
 

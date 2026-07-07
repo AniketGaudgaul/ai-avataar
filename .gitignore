@@ -22,6 +22,7 @@ env/
 # Data / artifacts (source docs and generated indexes are large / private)
 data/
 storage/
+temp_data/
 *.sqlite
 *.log
 
