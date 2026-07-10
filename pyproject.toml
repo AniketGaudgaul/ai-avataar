@@ -6,8 +6,11 @@ authors = [{ name = "Aniket Gaudgaul" }]
 readme = "README.md"
 requires-python = ">=3.11"
 
-# Core runtime dependencies. Versions are loose lower-bounds so pip can resolve
-# wheels compatible with the installed interpreter (Python 3.14 here).
+# Runtime dependencies — exactly what serving a request needs, nothing more.
+# This set is what the deployed container installs, so anything used only to
+# *build* the index belongs in the `ingest` extra below, not here.
+# Versions are loose lower-bounds so pip can resolve wheels compatible with the
+# installed interpreter (Python 3.14 on the dev box, 3.12 in the container).
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -21,19 +24,36 @@ dependencies = [
     # Agent orchestration
     "langgraph>=0.2",
     "langchain-core>=0.3",
-    # Document parsing (vector path) — LlamaParse v2 SDK
-    "llama-cloud>=2.0",
+    # Observability / tracing (Langfuse v4, OpenTelemetry-based). Decorator +
+    # OTel-context instrumentation — no langchain callback handler, so no heavy
+    # `langchain` dependency is pulled in.
+    "langfuse>=4.13",
     # Stores
     "qdrant-client>=1.14",
     "neo4j>=5.20",
-    # Sparse retrieval — BM25 sparse vectors via Qdrant/fastembed (server-native
-    # hybrid + RRF fusion, not hand-rolled). Replaces the rank_bm25 + manual RRF
-    # the spec originally assumed.
+    # Sparse retrieval. Despite the "server-side BM25" framing, qdrant-client
+    # embeds `Document(model="Qdrant/bm25")` **client-side** via fastembed before
+    # sending the query — verified: importing app.main loads fastembed and
+    # onnxruntime. So this is a query-time dependency and cannot move to `ingest`.
     "fastembed>=0.8",
     "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
+# Index-building only. The container never imports these: `app.main` reaches
+# neither `llama_cloud` nor `resvg_py` (only `ingestion/vector/parser.py` does,
+# and serving never imports it). Keeping them out of the runtime image cuts its
+# size and cold-start, which matters on a free-tier host that scales to zero.
+#     pip install -e ".[ingest]"     # dev box, to run the pipelines
+ingest = [
+    # Document parsing (vector path) — LlamaParse v2 SDK
+    "llama-cloud>=2.0",
+    # SVG rasterisation: Gemini Embedding 2 rejects image/svg+xml (400 "Provided
+    # image is not valid"), so authored .svg diagrams are rendered to PNG before
+    # embedding. resvg-py is a prebuilt Rust wheel — no cairo/C toolchain, which
+    # matters on the Python-3.14 dev box.
+    "resvg-py>=0.3",
+]
 # Evaluation / red-teaming stack (Phase B). Kept optional so the core app
 # installs fast and stays deployable without the heavy eval deps.
 evals = [
