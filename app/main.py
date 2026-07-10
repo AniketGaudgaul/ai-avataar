@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api.routes import chat, health
+from app.api.routes import chat, health, images
 from app.config import settings
 from app.core.logging import get_logger, setup_logging
 
@@ -20,9 +20,25 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger = get_logger(__name__)
     logger.info("startup", extra={"env": settings.app_env, "version": __version__})
-    # TODO: initialize store clients (Qdrant, Neo4j) and the compiled LangGraph
-    # here, attach to app.state, and close them on shutdown.
+    # Warm the compiled LangGraph and the project catalog (the router's
+    # project-filter vocabulary, read once from Neo4j) so the first request is
+    # fast and a graph/DB misconfig surfaces at startup, not mid-conversation.
+    from app.agents.catalog import get_project_catalog
+    from app.agents.graph import get_agent_graph
+    from app.core.tracing import get_langfuse, tracing_enabled
+    from app.core.tracing import shutdown as shutdown_tracing
+
+    # Initialise the Langfuse client at startup so the @observe decorators resolve
+    # the configured project (no-op when keys are absent).
+    get_langfuse()
+    get_agent_graph()
+    catalog = get_project_catalog()
+    logger.info(
+        "agent ready",
+        extra={"projects_in_catalog": len(catalog), "tracing": tracing_enabled()},
+    )
     yield
+    shutdown_tracing()  # flush queued Langfuse events before exit
     logger.info("shutdown")
 
 
@@ -43,6 +59,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(chat.router)
+app.include_router(images.router)
 
 
 @app.get("/", tags=["ops"])

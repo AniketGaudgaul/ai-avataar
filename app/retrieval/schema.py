@@ -21,6 +21,26 @@ class RetrievedContext(BaseModel):
     content_types: list[str] = Field(default_factory=list)
 
 
+class RetrievedImage(BaseModel):
+    """A diagram/figure surfaced by the image pass (spec 5.7, 6.3).
+
+    Returned separately from `RetrievedContext` rather than merged into it: image
+    and text scores come from different bands of the embedding space, so a single
+    ranked list is meaningless. `caption` is the text sidecar that was embedded
+    alongside the pixels; `linked_section_id` points back at the prose section the
+    figure illustrates."""
+
+    chunk_id: str
+    image_uri: str
+    doc_id: str
+    source_type: str
+    heading_path: str
+    citation_label: str
+    caption: str                    # the text sidecar
+    score: float
+    linked_section_id: str | None = None
+
+
 class GraphFact(BaseModel):
     """A citable relationship fact from the knowledge graph."""
 

@@ -45,7 +45,11 @@ class ParsedImage(BaseModel):
     Kept alongside the markdown so the Tier-3 multimodal path can embed these
     directly (Gemini Embedding 2) without re-parsing. `category` is LlamaParse's
     own class: 'layout' (cropped figure/table region), 'embedded' (raster image
-    embedded in the PDF), or 'screenshot' (full page)."""
+    embedded in the PDF), or 'screenshot' (full page).
+
+    The trailing fields are filled by the linking pass (`images.py`), which ties
+    each image back to the section it illustrates so the sidecar (spec 5.7) can
+    carry `heading_path` + caption."""
 
     filename: str
     category: str | None = None          # embedded | layout | screenshot
@@ -54,6 +58,13 @@ class ParsedImage(BaseModel):
     caption: str = ""
     content_type: str | None = None      # MIME, e.g. image/png
     size_bytes: int | None = None
+    # --- linking pass output ---
+    figure_label: str = ""               # "Figure 4" / "Table 2", when known
+    heading_path: str = ""               # section the image belongs to
+    section: str = ""
+    linked_section_id: str | None = None  # parent_section_id of that section
+    link_method: str = ""                # override | inline | caption_match | unlinked
+    link_confidence: float = 0.0         # vision matcher's confidence (caption_match only)
 
 
 class ParsedDoc(BaseModel):
@@ -88,6 +99,11 @@ class ChunkMetadata(BaseModel):
     content_type: ContentType = ContentType.PROSE
     modality: Modality = Modality.TEXT
     image_uri: str | None = None
+    # For an image chunk: the text section it illustrates. `parent_section_id` is
+    # the image's *own* id (an image is its own parent — it must never be stitched
+    # into a text section's small-to-big expansion), so this is the real bridge
+    # back to the prose, enabling text → section → diagram lookups.
+    linked_section_id: str | None = None
     citation_label: str = ""             # human-readable source for UI + guardrail
     date: str | None = None
     date_range: str | None = None
@@ -129,3 +145,7 @@ class ChunkedDoc(BaseModel):
     chunks: list[Chunk] = Field(default_factory=list)
     parent_sections: list[ParentSection] = Field(default_factory=list)
     images: list[ParsedImage] = Field(default_factory=list)
+    # Retrievable image chunks (modality=image), built from `images` by the
+    # linking pass. Kept apart from `chunks` so the text review artifact stays
+    # readable and so retrieval can query the two modalities separately.
+    image_chunks: list[Chunk] = Field(default_factory=list)

@@ -35,6 +35,32 @@ LIMIT $limit
 """
 
 
+_PROJECTS_CYPHER = """
+MATCH (p:Project)
+RETURN p.id AS id, p.canonical_name AS name
+ORDER BY name
+"""
+
+
+def list_projects() -> list[dict[str, str]]:
+    """Return every `Project` node as `{"id": slug, "name": canonical_name}`.
+
+    The router uses this as its project-filter vocabulary: `id` is exactly the
+    chunk `project_tag` (spec 5.5), so a project the router names can be turned
+    into a valid retrieval filter. Fetched once at startup and cached upstream."""
+    driver = get_driver()
+    projects: list[dict[str, str]] = []
+    try:
+        with driver.session(database=DEFAULT_DATABASE) as session:
+            for rec in session.run(_PROJECTS_CYPHER):
+                if rec["id"]:
+                    projects.append({"id": rec["id"], "name": rec["name"] or rec["id"]})
+    finally:
+        driver.close()
+    logger.info("list projects", extra={"count": len(projects)})
+    return projects
+
+
 def facts_for_entities(names: list[str], *, limit: int = 50) -> list[GraphFact]:
     """Return citable relationship facts for the given entity names (case-insensitive
     match on canonical_name or aliases)."""

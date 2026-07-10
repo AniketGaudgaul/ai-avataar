@@ -46,8 +46,13 @@ from app.ingestion.vector.tokens import count_tokens
 logger = get_logger(__name__)
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
-_IMAGE_RE = re.compile(r"^!\[[^\]]*\]\([^)]*\)\s*$")
-_DROP_SECTION_RE = re.compile(r"^(references|bibliography|acknowledge?ments?)\b", re.IGNORECASE)
+_IMAGE_RE = re.compile(r"^!\[([^\]]*)\]\([^)]*\)\s*$")
+# A bare `---` / `***` / `___` rule carries no meaning and would otherwise become
+# its own one-token chunk.
+_HRULE_RE = re.compile(r"^\s*([-*_])\s*(?:\1\s*){2,}$")
+_DROP_SECTION_RE = re.compile(
+    r"^(references|bibliography|acknowledge?ments?|(table of )?contents)\b", re.IGNORECASE
+)
 # Metric-ish content worth tagging (percentages, multipliers, big counts, common
 # ML scores) — these are the highest-value explanatory-query targets.
 _METRIC_RE = re.compile(
@@ -62,12 +67,20 @@ _BREADCRUMB = " ▸ "
 @dataclass
 class _Block:
     kind: str            # "heading" | "para" | "code" | "table" | "figure"
-    text: str
+    text: str            # raw markdown (a figure keeps its `![alt](uri)` form)
     level: int = 0       # heading level, else 0
+    alt: str = ""        # figure only: the alt text, used as the chunk's content
 
     @property
     def atomic(self) -> bool:
         return self.kind in ("code", "table", "figure")
+
+    @property
+    def content(self) -> str:
+        """What this block contributes to a chunk. A figure contributes its alt
+        text, not `![alt](./images/x.png)` — the uri is path noise in an embedding
+        and the raw form is only kept so the image linker can find the reference."""
+        return self.alt if self.kind == "figure" and self.alt else self.text
 
 
 def _parse_blocks(markdown: str) -> list[_Block]:
@@ -122,9 +135,15 @@ def _parse_blocks(markdown: str) -> list[_Block]:
             continue
 
         # Standalone image / figure.
-        if _IMAGE_RE.match(stripped):
+        if m := _IMAGE_RE.match(stripped):
             flush_para()
-            blocks.append(_Block("figure", stripped))
+            blocks.append(_Block("figure", stripped, alt=m.group(1).strip()))
+            i += 1
+            continue
+
+        # Horizontal rule — a separator, not content.
+        if _HRULE_RE.match(stripped):
+            flush_para()
             i += 1
             continue
 
@@ -150,7 +169,13 @@ class _Section:
     blocks: list[_Block] = field(default_factory=list)
 
     def text(self) -> str:
+        """Raw section text — keeps `![alt](uri)` intact so `images.link_images`
+        can resolve each figure to this section. Use `content()` for anything
+        that gets embedded or shown."""
         return "\n\n".join(b.text for b in self.blocks).strip()
+
+    def content(self) -> str:
+        return "\n\n".join(b.content for b in self.blocks).strip()
 
 
 def _build_sections(blocks: list[_Block], doc_title: str) -> list[_Section]:
@@ -217,15 +242,14 @@ def _merge_tiny(sections: list[_Section]) -> list[_Section]:
 # --- Chunk assembly ---------------------------------------------------------
 
 def _classify(child_blocks: list[_Block]) -> ContentType:
-    if len(child_blocks) == 1:
-        kind = child_blocks[0].kind
-        if kind == "code":
-            return ContentType.CODE
-        if kind == "table":
-            return ContentType.TABLE
-        if kind == "figure":
-            return ContentType.DIAGRAM_CAPTION
-    text = "\n".join(b.text for b in child_blocks)
+    kinds = {b.kind for b in child_blocks}
+    if kinds == {"figure"}:
+        return ContentType.DIAGRAM_CAPTION
+    if "code" in kinds:
+        return ContentType.CODE
+    if "table" in kinds:
+        return ContentType.TABLE
+    text = "\n".join(b.content for b in child_blocks)
     return ContentType.METRIC if _METRIC_RE.search(text) else ContentType.PROSE
 
 
@@ -235,6 +259,7 @@ def _split_section(section: _Section, max_tokens: int) -> list[list[_Block]]:
     children: list[list[_Block]] = []
     buf: list[_Block] = []
     buf_tokens = 0
+    lead_in_max = settings.chunk_tiny_merge_tokens
 
     def flush() -> None:
         nonlocal buf, buf_tokens
@@ -244,6 +269,14 @@ def _split_section(section: _Section, max_tokens: int) -> list[list[_Block]]:
 
     for block in section.blocks:
         if block.atomic:
+            # A short lead-in ("Every chunk carries a metadata structure of the
+            # shape:") is meaningless alone and is exactly the sentence that says
+            # what the table/code below it *is* — keep it attached rather than
+            # emitting it as an orphan child.
+            if buf and buf_tokens <= lead_in_max:
+                children.append([*buf, block])
+                buf, buf_tokens = [], 0
+                continue
             flush()
             children.append([block])
             continue
@@ -256,6 +289,32 @@ def _split_section(section: _Section, max_tokens: int) -> list[list[_Block]]:
             flush()
     flush()
     return children or [[]]
+
+
+def parent_section_id(doc_id: str, section_index: int) -> str:
+    """The canonical parent id for the n-th section of a document.
+
+    Shared with the image linker (`images.py`) so an image can point at exactly
+    the section id the chunker will emit — the two passes must agree."""
+    return f"{doc_id}:s{section_index:03d}"
+
+
+def section_index(doc: ParsedDoc) -> list[ParentSection]:
+    """The document's sections, in the same order (and with the same ids) that
+    `chunk_parsed_doc` will produce. Lets the image-linking pass resolve a
+    caption's surrounding heading without re-running chunking."""
+    sections = _build_sections(_parse_blocks(doc.markdown), doc.title)
+    return [
+        ParentSection(
+            parent_section_id=parent_section_id(doc.doc_id, i),
+            doc_id=doc.doc_id,
+            heading_path=s.heading_path,
+            section=s.section,
+            text=s.text(),
+            token_count=count_tokens(s.text()),
+        )
+        for i, s in enumerate(sections)
+    ]
 
 
 def chunk_parsed_doc(doc: ParsedDoc) -> ChunkedDoc:
@@ -271,8 +330,8 @@ def chunk_parsed_doc(doc: ParsedDoc) -> ChunkedDoc:
     idx = 0
 
     for s_i, section in enumerate(sections):
-        section_text = section.text()
-        parent_id = f"{doc.doc_id}:s{s_i:03d}"
+        section_text = section.content()
+        parent_id = parent_section_id(doc.doc_id, s_i)
         parents.append(
             ParentSection(
                 parent_section_id=parent_id,
@@ -287,7 +346,7 @@ def chunk_parsed_doc(doc: ParsedDoc) -> ChunkedDoc:
         for child_blocks in _split_section(section, child_max):
             if not child_blocks:
                 continue
-            text = "\n\n".join(b.text for b in child_blocks).strip()
+            text = "\n\n".join(b.content for b in child_blocks).strip()
             if not text:
                 continue
             meta = ChunkMetadata(
