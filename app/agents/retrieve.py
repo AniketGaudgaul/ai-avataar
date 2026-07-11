@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from app.agents.context import assemble_context
 from app.agents.figures import loadable
+from app.agents.profile import PROFILE_CARD
 from app.agents.state import AvatarState
 from app.config import settings
 from app.core.logging import get_logger
@@ -71,7 +72,10 @@ def retrieve_node(state: AvatarState) -> dict:
             names = [settings.avatar_person_name]
         graph_facts = facts_for_entities(_dedupe(names))
 
-    context_block, citations = assemble_context(contexts, graph_facts)
+    profile_card = PROFILE_CARD if state.get("include_profile") else None
+    context_block, citations = assemble_context(
+        contexts, graph_facts, profile_card=profile_card
+    )
 
     logger.info(
         "retrieve",

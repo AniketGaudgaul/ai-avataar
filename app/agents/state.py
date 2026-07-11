@@ -47,6 +47,7 @@ class AvatarState(TypedDict, total=False):
     project_tag: str              # project filter ("" = no filter)
     answer_depth: AnswerDepth     # overview (gist + offer) vs detail
     visual_intent: bool           # user explicitly asked to *see* a diagram/figure
+    include_profile: bool         # inject the canonical résumé profile card ([1])
 
     # --- Retrieve output ---
     retrieved_context: list[RetrievedContext]

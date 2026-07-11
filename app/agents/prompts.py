@@ -180,10 +180,16 @@ Produce these fields:
    "explain the architecture" is false — figures belonging to the retrieved
    sections are offered to the specialist either way. Default false.
 
+8. `include_profile` — true when the answer needs his whole-career skeleton, not
+   a narrow fact: broad overview/summary questions ("who is he", "tell me about
+   his background", "summarise his career", "what has he done"), and ALL
+   recruiter-fit questions. False for a narrow single fact ("when did he join
+   Yarnit"), a single-project question, or a meta question. Default false.
+
 Guidelines:
-- Meta → route "meta", plan "vector", answer_depth "detail".
+- Meta → route "meta", plan "vector", answer_depth "detail", include_profile false.
 - out_of_scope → plan "none", search_query "", entities [], project_tag "",
-  answer_depth "detail", visual_intent false.
+  answer_depth "detail", visual_intent false, include_profile false.
 - Keep `rationale` to one short sentence.
 """
 

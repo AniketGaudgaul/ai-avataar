@@ -50,6 +50,12 @@ class RouterDecision(BaseModel):
         description="True only when the user explicitly asks to SEE a diagram, "
         "figure, screenshot, or chart.",
     )
+    include_profile: bool = Field(
+        default=False,
+        description="True for broad overview/summary questions about him as a "
+        "whole, and for ALL recruiter-fit questions; false for narrow single-fact, "
+        "single-project, or meta questions.",
+    )
     rationale: str = ""
 
 
@@ -100,6 +106,13 @@ def router_node(state: AvatarState) -> dict:
         logger.info("router dropped unknown project_tag", extra={"project_tag": project_tag})
         project_tag = ""
 
+    # A recruiter read is always a whole-profile judgment, so guarantee the card
+    # there even if the model forgot the flag; out-of-scope never retrieves.
+    include_profile = (
+        (decision.include_profile or decision.route == "recruiter")
+        and decision.route != "out_of_scope"
+    )
+
     router_summary = {
         "route": decision.route,
         "retrieval_plan": plan,
@@ -108,6 +121,7 @@ def router_node(state: AvatarState) -> dict:
         "project_tag": project_tag,
         "answer_depth": decision.answer_depth,
         "visual_intent": decision.visual_intent,
+        "include_profile": include_profile,
     }
     logger.info("router", extra=router_summary)
     span_update(input={"query": query}, output=router_summary)
@@ -119,6 +133,7 @@ def router_node(state: AvatarState) -> dict:
         "project_tag": project_tag,
         "answer_depth": decision.answer_depth,
         "visual_intent": decision.visual_intent,
+        "include_profile": include_profile,
         "retry_count": 0,
     }
 

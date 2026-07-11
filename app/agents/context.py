@@ -108,15 +108,21 @@ def assemble_context(
     *,
     max_contexts: int | None = None,
     max_chars: int | None = None,
+    profile_card: str | None = None,
 ) -> tuple[str, list[Citation]]:
     """Return `(context_block, citations)` where `citations[i]` labels marker
-    `[i+1]`. Vector contexts come first; graph facts collapse into one trailing
-    numbered block."""
+    `[i+1]`. An optional profile card leads as `[1]`; then vector contexts; then
+    graph facts collapse into one trailing numbered block."""
     max_contexts = max_contexts if max_contexts is not None else settings.agent_max_contexts
     max_chars = max_chars if max_chars is not None else settings.agent_max_context_chars
 
     blocks: list[str] = []
     citations: list[Citation] = []
+
+    if profile_card and profile_card.strip():
+        label = "Résumé — Profile"
+        citations.append(Citation(label=label, source_type="resume", ref="resume-profile"))
+        blocks.append(f"[1] ({label})\n{profile_card.strip()}")
 
     for c in contexts[:max_contexts]:
         n = len(citations) + 1
