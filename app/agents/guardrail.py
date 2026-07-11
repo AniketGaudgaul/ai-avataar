@@ -8,13 +8,13 @@ An LLM-based faithfulness check can slot in later behind the same interface.
 Checks:
 1. Grounding — if sources were retrieved, the answer must carry at least one
    `[n]` citation marker (spec 8: every factual claim must cite). A graceful
-   "not in my sources" decline is exempt.
+   natural-language decline ("that hasn't come up in his work") is exempt.
 2. No-source assertions — if nothing was retrieved, the answer must be a
    graceful decline, not an asserted fact (guards against fabrication).
 3. Out-of-scope leakage — the answer must not surface banned topics
    (compensation figures, personal-life terms).
-4. Recruiter projection label — recruiter-lane answers must call themselves a
-   projection (spec 8).
+4. Recruiter hedge — recruiter-lane answers must frame themselves as a read on
+   the evidence, not a guarantee (spec 8), in any natural phrasing.
 """
 
 from __future__ import annotations
@@ -46,8 +46,10 @@ _BANNED_TERMS = (
     "home address",
 )
 
-# Phrases that mark a legitimate grounded "I don't have that" decline, which is
-# exempt from the citation requirement.
+# Phrases that mark a legitimate "I don't have that" decline, which is exempt
+# from the citation requirement. The twin now declines in natural language
+# ("hasn't come up in his work") rather than naming its sources, so match those
+# too — not just the old "not in my sources" phrasing.
 _DECLINE_MARKERS = (
     "don't have",
     "do not have",
@@ -55,10 +57,39 @@ _DECLINE_MARKERS = (
     "isn't in",
     "is not in",
     "no information",
+    "no detail",
     "can't speak to",
     "cannot speak to",
     "outside what i can",
+    "outside my lane",
     "not something i can",
+    "hasn't come up",
+    "haven't come up",
+    "hasn't really come up",
+    "isn't something",
+    "not something i",
+    "leave that to",
+    "leave things like",
+)
+
+# Natural ways a recruiter answer frames itself as a read on the evidence rather
+# than a guarantee (replaces the old hard requirement of the word "projection").
+_HEDGE_MARKERS = (
+    "projection",
+    "from what he",
+    "based on his",
+    "based on what he",
+    "his background",
+    "his track record",
+    "the evidence",
+    "what he's built",
+    "what he's done",
+    "would be a",
+    "would likely",
+    "appears to",
+    "my read",
+    "not a guarantee",
+    "on paper",
 )
 
 
@@ -95,9 +126,10 @@ def guardrail_node(state: AvatarState) -> dict:
     if leaked:
         reasons.append(f"Answer surfaces out-of-scope topic(s): {', '.join(leaked)}.")
 
-    # 4. Recruiter answers must be labelled a projection.
-    if route == "recruiter" and "projection" not in low:
-        reasons.append("Recruiter-fit answer is missing the required 'projection' disclaimer.")
+    # 4. Recruiter answers must frame themselves as a read on the evidence, not a
+    #    guarantee — accept any natural hedge, not just the word "projection".
+    if route == "recruiter" and not any(h in low for h in _HEDGE_MARKERS):
+        reasons.append("Recruiter-fit answer doesn't frame itself as a read on the evidence.")
 
     verdict = {"pass": not reasons, "reasons": reasons}
     logger.info("guardrail", extra={"pass": verdict["pass"], "reasons": reasons, "route": route})

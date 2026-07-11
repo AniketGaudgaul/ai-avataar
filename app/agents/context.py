@@ -24,6 +24,55 @@ from app.retrieval.schema import GraphFact, RetrievedContext
 # Anchoring on all-digit brackets keeps figure markers ("[img1]") out.
 _MARKER_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
+_LABEL_SEP = " — "
+
+
+def _fix_mojibake(s: str) -> str:
+    """Repair the common UTF-8-decoded-as-Latin-1 corruption (e.g. "â€"" → "—").
+
+    Some Qdrant points were written with a mangled em-dash; rather than re-ingest,
+    undo the round-trip at the boundary. Only attempted when a tell-tale marker is
+    present, and reverted if the re-decode fails — so clean labels are untouched.
+    """
+    if not any(tell in s for tell in ("Ã", "â€", "Â")):
+        return s
+    # The corruption is UTF-8 bytes decoded as Windows-1252 (its 0x80-0x9F range,
+    # e.g. "€"/"”", is why plain latin-1 can't reverse it) — so re-encode cp1252.
+    try:
+        return s.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
+def clean_label(label: str) -> str:
+    """Tidy a stored citation label for display.
+
+    Ingest builds labels as "Doc Title — Section", which reads badly in a chip
+    when the section repeats the title ("X — X") or the title is a long
+    "Short: long academic subtitle". Collapse the duplication and keep the short
+    title, so a chip reads "MedSumm — Table 1" instead of the full paper name
+    twice. Purely cosmetic; the retrieval and citation logic are untouched.
+    """
+    s = _fix_mojibake(label or "").strip()
+    parts = [p.strip() for p in s.split(_LABEL_SEP) if p.strip()]
+    if not parts:
+        return s
+
+    # Collapse adjacent duplicate segments first ("X — X" → "X").
+    deduped: list[str] = []
+    for p in parts:
+        if not deduped or deduped[-1].casefold() != p.casefold():
+            deduped.append(p)
+
+    # Then shorten a long "Title: subtitle" head to just the title.
+    head = deduped[0]
+    if len(head) > 40 and ":" in head:
+        short = head.split(":", 1)[0].strip()
+        if 2 <= len(short) <= 40:
+            deduped[0] = short
+
+    return _LABEL_SEP.join(deduped)
+
 
 def assemble_context(
     contexts: list[RetrievedContext],
@@ -46,10 +95,11 @@ def assemble_context(
         text = c.text.strip()
         if len(text) > max_chars:
             text = text[:max_chars].rstrip() + " …[truncated]"
+        label = clean_label(c.citation_label)
         citations.append(
-            Citation(label=c.citation_label, source_type=c.source_type, ref=c.parent_section_id)
+            Citation(label=label, source_type=c.source_type, ref=c.parent_section_id)
         )
-        blocks.append(f"[{n}] ({c.citation_label})\n{text}")
+        blocks.append(f"[{n}] ({label})\n{text}")
 
     if graph_facts:
         n = len(citations) + 1

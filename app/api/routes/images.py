@@ -27,10 +27,19 @@ def image_url(chunk_id: str) -> str:
 
     Absolute when `public_base_url` is configured: the widget is served from
     GitHub Pages, where a relative path would resolve against the portfolio site
-    rather than this API."""
+    rather than this API.
+
+    A configured base with no scheme (e.g. Railway's bare
+    "host.up.railway.app") is just as broken as a relative path — the browser
+    treats `<img src="host/…">` as relative and resolves it against the
+    portfolio origin — so force it to an absolute https URL."""
     path = f"/images/{chunk_id}"
-    base = settings.public_base_url.rstrip("/")
-    return f"{base}{path}" if base else path
+    base = settings.public_base_url.strip().rstrip("/")
+    if not base:
+        return path
+    if "://" not in base:
+        base = f"https://{base}"
+    return f"{base}{path}"
 
 
 @router.get("/images/{chunk_id}")
