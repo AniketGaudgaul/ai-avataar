@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 
+from app.agents.prompts import persona_present
 from app.agents.state import AvatarState
 from app.core.logging import get_logger
 from app.core.tracing import observe, span_update
@@ -105,18 +106,22 @@ def guardrail_node(state: AvatarState) -> dict:
     route = state.get("route")
     low = answer.lower()
 
-    has_grounding = bool(state.get("retrieved_context") or state.get("graph_facts"))
+    has_rag = bool(state.get("retrieved_context") or state.get("graph_facts"))
     has_citation = bool(_MARKER_RE.search(answer))
     is_decline = _looks_like_decline(answer)
+    # The always-on status brief is grounding too, but its facts carry no [n]
+    # marker — so it lets an answer stand without retrieval, yet never satisfies
+    # the citation requirement for retrieved facts.
+    has_persona = persona_present()
 
     reasons: list[str] = []
 
-    # 1. Grounded claims must cite.
-    if has_grounding and not has_citation and not is_decline:
+    # 1. Retrieved claims must cite (status-brief-only answers are exempt).
+    if has_rag and not has_citation and not is_decline:
         reasons.append("Answer states facts but includes no [n] citation markers.")
 
-    # 2. No sources retrieved → must be a graceful decline, not an assertion.
-    if not has_grounding and not is_decline:
+    # 2. Nothing to answer from (no retrieval, no status brief) → must decline.
+    if not has_rag and not has_persona and not is_decline:
         reasons.append(
             "No sources were retrieved, but the answer asserts facts instead of declining."
         )
@@ -135,7 +140,7 @@ def guardrail_node(state: AvatarState) -> dict:
     logger.info("guardrail", extra={"pass": verdict["pass"], "reasons": reasons, "route": route})
     span_update(
         output={"pass": verdict["pass"], "reasons": reasons, "route": route},
-        metadata={"has_grounding": has_grounding, "has_citation": has_citation},
+        metadata={"has_rag": has_rag, "has_persona": has_persona, "has_citation": has_citation},
     )
     return {"guardrail_verdict": verdict}
 

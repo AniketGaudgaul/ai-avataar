@@ -26,6 +26,7 @@ from app.agents.figures import (
     strip_unknown_markers,
     used_images,
 )
+from app.agents.prompts import persona_section
 from app.agents.state import AvatarState
 from app.config import settings
 from app.core.gemini import generate_text
@@ -84,11 +85,16 @@ def run_specialist(
     ]
     prompt = "\n\n".join(s for s in sections if s)
 
+    # Append the user's editable status brief so every lane can answer
+    # availability/contact-style questions without needing retrieval.
+    persona = persona_section()
+    system_instruction = f"{system_prompt}\n\n{persona}" if persona else system_prompt
+
     answer = generate_text(
         prompt=prompt,
         model=model,
         temperature=temperature,
-        system_instruction=system_prompt,
+        system_instruction=system_instruction,
         images=image_parts,
     )
     # A marker the model invented would leave a dangling reference in the API

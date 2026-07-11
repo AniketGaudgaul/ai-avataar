@@ -8,7 +8,7 @@ locates it in `answer`.
 
 from fastapi import APIRouter, HTTPException
 
-from app.agents.context import clean_label
+from app.agents.context import clean_label, short_caption
 from app.agents.runner import run_agent
 from app.api.routes.images import image_url
 from app.api.schemas import AnswerImage, ChatRequest, ChatResponse, Citation
@@ -40,7 +40,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
                 marker=f.marker,
                 chunk_id=f.image.chunk_id,
                 url=image_url(f.image.chunk_id),
-                caption=f.image.caption,
+                caption=short_caption(f.image.caption, f.image.heading_path),
                 label=clean_label(f.image.citation_label),
                 source_type=f.image.source_type,
             )

@@ -74,6 +74,34 @@ def clean_label(label: str) -> str:
     return _LABEL_SEP.join(deduped)
 
 
+# Split on a sentence-ending period + space; ":" is deliberately NOT a boundary,
+# so a paper caption ("Table 1: Performance of …") survives whole.
+_SENTENCE_RE = re.compile(r"(?<=\.)\s+")
+
+
+def short_caption(sidecar: str, heading_path: str = "", *, max_len: int = 150) -> str:
+    """A reader-friendly one-liner for a figure, from its retrieval sidecar.
+
+    The stored sidecar is built for recall, not reading — it prefixes the figure
+    with its full heading breadcrumb and then a long description. Strip the
+    breadcrumb and keep the first sentence, so a KB figure collapses to its title
+    ("Two-phase agent pipeline") and a paper figure keeps its caption ("Table 1:
+    Performance of …"). Cosmetic only; the embedded sidecar is untouched.
+    """
+    s = _fix_mojibake(sidecar or "").strip()
+    hp = _fix_mojibake(heading_path or "").strip()
+    if hp and s.startswith(hp):
+        s = s[len(hp) :]
+    elif "▸" in s:  # no heading_path handed in — cut after the last breadcrumb arrow
+        s = s.rsplit("▸", 1)[1]
+    s = s.lstrip(" .:—-▸").strip() or _fix_mojibake(sidecar or "").strip()
+
+    first = _SENTENCE_RE.split(s, maxsplit=1)[0].strip().rstrip(".")
+    if len(first) > max_len:
+        first = first[:max_len].rsplit(" ", 1)[0].rstrip(" ,;:—-") + "…"
+    return first
+
+
 def assemble_context(
     contexts: list[RetrievedContext],
     graph_facts: list[GraphFact],
