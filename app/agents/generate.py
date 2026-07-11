@@ -113,7 +113,7 @@ def run_specialist(
             "retry_count": retry_count,
             "regenerated": bool(feedback),
             "figures_shown": len(image_parts),
-            "figures_used": [i.citation_label for i in chosen],
+            "figures_used": [i.image.citation_label for i in chosen],
         },
     )
     return {"draft_answer": answer, "retry_count": retry_count, "answer_images": chosen}

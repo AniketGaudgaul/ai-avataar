@@ -19,8 +19,12 @@ dependencies = [
     "httpx>=0.27",
     "tenacity>=9.0",
     "python-json-logger>=2.0",
-    # LLM + embeddings (Gemini via the unified Google GenAI SDK)
+    # LLM + embeddings (Gemini via the unified Google GenAI SDK). Embeddings are
+    # always Gemini; generation is provider-switchable (see settings.llm_provider).
     "google-genai>=0.3",
+    # Generation backend when llm_provider="openai" (GPT-5.x reasoning models via
+    # the Responses API). Needs a recent SDK for responses.parse structured output.
+    "openai>=1.66",
     # Agent orchestration
     "langgraph>=0.2",
     "langchain-core>=0.3",

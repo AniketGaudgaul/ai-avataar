@@ -87,6 +87,40 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+def generate_structured(
+    *,
+    prompt: str,
+    schema: type[T] | type[list[T]],
+    model: str | None = None,
+    temperature: float = 0.0,
+    system_instruction: str | None = None,
+    reasoning_effort: str | None = None,
+) -> T | list[T]:
+    """Schema-constrained generation, dispatched to the configured provider.
+
+    Provider-neutral entry point (unchanged signature so no caller cares which
+    backend runs). `temperature` applies to Gemini; `reasoning_effort` applies to
+    OpenAI's reasoning models — each provider ignores the other's knob.
+    """
+    if settings.llm_provider == "openai":
+        from app.core.openai_client import openai_generate_structured
+
+        return openai_generate_structured(
+            prompt=prompt,
+            schema=schema,
+            model=model,
+            system_instruction=system_instruction,
+            reasoning_effort=reasoning_effort,
+        )
+    return _gemini_generate_structured(
+        prompt=prompt,
+        schema=schema,
+        model=model,
+        temperature=temperature,
+        system_instruction=system_instruction,
+    )
+
+
 # @observe wraps @retry so a single generation span covers all retry attempts.
 @observe(as_type="generation", name="gemini.generate_structured")
 @retry(
@@ -95,7 +129,7 @@ def _is_retryable(exc: BaseException) -> bool:
     stop=stop_after_attempt(5),
     reraise=True,
 )
-def generate_structured(
+def _gemini_generate_structured(
     *,
     prompt: str,
     schema: type[T] | type[list[T]],
@@ -103,11 +137,10 @@ def generate_structured(
     temperature: float = 0.0,
     system_instruction: str | None = None,
 ) -> T | list[T]:
-    """Run a schema-constrained JSON generation and return `response.parsed`.
+    """Gemini implementation: schema-constrained JSON → `response.parsed`.
 
-    `schema` may be a Pydantic model or a `list[Model]`. The parsed value is a
-    validated instance (or list) of that type. Retries on free-tier 429s with
-    exponential backoff (the per-minute throttle clears in ~30s).
+    `schema` may be a Pydantic model or a `list[Model]`. Retries on free-tier
+    429s with exponential backoff (the per-minute throttle clears in ~30s).
     """
     client = get_client()
     model = model or settings.gemini_router_model
@@ -126,13 +159,6 @@ def generate_structured(
     return resp.parsed
 
 
-@observe(as_type="generation", name="gemini.generate_text")
-@retry(
-    retry=retry_if_exception(_is_retryable),
-    wait=wait_exponential(multiplier=1, min=15, max=60),
-    stop=stop_after_attempt(5),
-    reraise=True,
-)
 def generate_text(
     *,
     prompt: str,
@@ -140,18 +166,52 @@ def generate_text(
     temperature: float = 0.2,
     system_instruction: str | None = None,
     images: Sequence[ImagePart] = (),
+    reasoning_effort: str | None = None,
 ) -> str:
-    """Run a text generation and return the response text.
+    """Free-form text generation, dispatched to the configured provider.
 
-    Used by the specialist agents (spec 7.3), which emit free-form prose with
-    inline `[n]` citation markers rather than a fixed JSON shape. Retries on
-    free-tier 429s / transient 5xx with exponential backoff, same as
-    `generate_structured`.
+    Used by the specialist agents (spec 7.3), which emit prose with inline `[n]`
+    citation markers. Provider-neutral (unchanged signature). `images` inlines
+    figures so the model reasons over the pixels; a model surfaces one by writing
+    its marker (see `app/agents/figures.py`).
+    """
+    if settings.llm_provider == "openai":
+        from app.core.openai_client import openai_generate_text
 
-    `images` inlines figures into the request so the model reasons over the
-    pixels, not just the caption; each is introduced by its `label`. The response
-    is still plain text — a model that wants to surface an image does so by
-    writing that image's marker (see `app/agents/figures.py`).
+        return openai_generate_text(
+            prompt=prompt,
+            model=model,
+            system_instruction=system_instruction,
+            images=images,
+            reasoning_effort=reasoning_effort,
+        )
+    return _gemini_generate_text(
+        prompt=prompt,
+        model=model,
+        temperature=temperature,
+        system_instruction=system_instruction,
+        images=images,
+    )
+
+
+@observe(as_type="generation", name="gemini.generate_text")
+@retry(
+    retry=retry_if_exception(_is_retryable),
+    wait=wait_exponential(multiplier=1, min=15, max=60),
+    stop=stop_after_attempt(5),
+    reraise=True,
+)
+def _gemini_generate_text(
+    *,
+    prompt: str,
+    model: str | None = None,
+    temperature: float = 0.2,
+    system_instruction: str | None = None,
+    images: Sequence[ImagePart] = (),
+) -> str:
+    """Gemini implementation: free-form text generation → response text.
+
+    Retries on free-tier 429s / transient 5xx with exponential backoff.
     """
     client = get_client()
     model = model or settings.gemini_router_model

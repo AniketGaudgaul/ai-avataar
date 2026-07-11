@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Empty = emit relative URLs (fine for local dev on one origin).
     public_base_url: str = ""
 
+    # --- LLM provider ---
+    # Which backend serves *generation* (router + specialists + guardrail, and the
+    # ingest-time extractor). Embeddings are NOT affected by this — they always go
+    # to Gemini Embedding 2 (the 360-point Qdrant corpus is in that space and its
+    # quota is separate from generation). Flip to "gemini" to revert generation.
+    llm_provider: str = "openai"
+
     # --- Gemini ---
     google_api_key: str = ""
     gemini_router_model: str = "gemini-2.5-flash-lite"
@@ -39,15 +46,25 @@ class Settings(BaseSettings):
     gemini_embedding_model: str = "gemini-embedding-2"
     embedding_dim: int = 1536
 
+    # --- OpenAI (generation, while Gemini generation billing is unresolved) ---
+    # gpt-5.4-mini/nano are *reasoning* models: they take `reasoning.effort`
+    # (none|low|medium|high|xhigh), NOT `temperature`. The OpenAI client maps our
+    # calls onto effort levels and ignores the temperature the callers pass.
+    openai_api_key: str = ""
+    openai_default_model: str = "gpt-5.4-mini"  # safety net when a caller passes no model
+    # Effort per call shape. Router/extraction are deterministic classification →
+    # "none" (cheapest, no reasoning tokens). Specialist synthesis gets a little.
+    openai_reasoning_effort_structured: str = "none"
+    openai_reasoning_effort_text: str = "low"
+
     # --- Agents (spec 7) ---
-    # Free-tier note (see project memory): every agent call uses flash-lite for
-    # now. The spec's per-agent model choices (Flash for Q&A, Pro for Deep-Dive)
-    # are deferred until billing is enabled — these are parameters so they can be
-    # bumped without code changes.
-    agent_router_model: str = "gemini-2.5-flash-lite"
-    agent_career_model: str = "gemini-2.5-flash-lite"
-    agent_deep_dive_model: str = "gemini-2.5-flash-lite"
-    agent_recruiter_model: str = "gemini-2.5-flash-lite"
+    # Per-agent generation model. Now pointed at OpenAI while Gemini generation
+    # billing is unresolved (embeddings stay on Gemini — see llm_provider).
+    # Gemini revert values: all four were "gemini-2.5-flash-lite".
+    agent_router_model: str = "gpt-5.4-nano"      # cheap classifier/query-planner
+    agent_career_model: str = "gpt-5.4-mini"
+    agent_deep_dive_model: str = "gpt-5.4-mini"
+    agent_recruiter_model: str = "gpt-5.4-mini"
     # The single Person the avatar represents — used to seed graph-fact lookups
     # for relational career queries where the query says "he"/"his".
     avatar_person_name: str = "Aniket Gaudgaul"

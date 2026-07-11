@@ -123,6 +123,32 @@ def record_generation_usage(resp: Any, *, model: str) -> None:
     )
 
 
+def record_openai_usage(resp: Any, *, model: str) -> None:
+    """Record model + token usage from an OpenAI Responses object.
+
+    OpenAI names tokens differently from Gemini: `usage.input_tokens` /
+    `output_tokens` / `total_tokens`, with cached and reasoning counts nested in
+    `input_tokens_details.cached_tokens` / `output_tokens_details.reasoning_tokens`.
+    Maps them to the same Langfuse `usage_details` keys so cost is computed the
+    same way. No-op when tracing is disabled."""
+    if not tracing_enabled():
+        return
+    usage_details: dict[str, int] = {}
+    u = getattr(resp, "usage", None)
+    if u is not None:
+        itd = getattr(u, "input_tokens_details", None)
+        otd = getattr(u, "output_tokens_details", None)
+        candidates = {
+            "input": getattr(u, "input_tokens", None),
+            "output": getattr(u, "output_tokens", None),
+            "total": getattr(u, "total_tokens", None),
+            "cached": getattr(itd, "cached_tokens", None) if itd is not None else None,
+            "reasoning": getattr(otd, "reasoning_tokens", None) if otd is not None else None,
+        }
+        usage_details = {k: v for k, v in candidates.items() if isinstance(v, int)}
+    get_langfuse().update_current_generation(model=model, usage_details=usage_details or None)
+
+
 def flush() -> None:
     """Flush queued events (call at the end of a short-lived CLI run)."""
     if tracing_enabled():
