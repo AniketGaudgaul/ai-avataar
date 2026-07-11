@@ -57,6 +57,23 @@ def retrieve_node(state: AvatarState) -> dict:
             source_type=source_type,
             project_tag=project_tag,
         )
+        # A project_tag that matches no chunks must not cause a false refusal:
+        # the project may exist in the graph but have no (or differently-tagged)
+        # documents — e.g. the ECIR paper is a Publication with an empty tag, so a
+        # query the router scoped to `medsumm-research` filtered to zero. Fall back
+        # to unfiltered retrieval, and un-scope the figure pass with it.
+        if not contexts and project_tag:
+            logger.info(
+                "project_tag filter matched no chunks; retrying unfiltered",
+                extra={"project_tag": project_tag},
+            )
+            project_tag = None
+            contexts = vector_retrieve(
+                search_query,
+                limit=settings.agent_max_contexts,
+                source_type=source_type,
+                project_tag=None,
+            )
         images = _figures_for(
             contexts,
             search_query,
