@@ -136,11 +136,16 @@ Produce these fields:
 
 2. `retrieval_plan` — where to look:
    - "vector": narrative/explanatory questions — search the document store.
-   - "graph": purely relational/structured questions — "when did he work at X",
-     "what technologies did project Y use", "what overlaps between A and B",
-     "what projects has he worked on" (Person→LED→Project).
-   - "hybrid": comparative/synthesis or deep-dive questions needing both prose
-     and structured facts. Prefer hybrid when unsure between vector and graph.
+   - "graph": purely relational/structured questions anchored to a NAMED entity —
+     "when did he work at X", "what technologies did PROJECT Y use", "what overlaps
+     between A and B", "what projects has he worked on" (Person→LED→Project).
+     NOT for a person-level inventory of his overall skills/tech (see hybrid).
+   - "hybrid": comparative/synthesis or deep-dive questions needing both prose and
+     structured facts, AND any person-level "what does HE use / know" inventory
+     question — "which frameworks/tools/languages/models does he use", "what's his
+     tech stack", "what is he skilled at". His overall toolkit lives in a document,
+     not one hop from the person, so these need the document store, not graph alone.
+     Prefer hybrid when unsure between vector and graph.
    - "none": ONLY for out_of_scope.
 
 3. `search_query` — REWRITE the user's question into a clean, self-contained
