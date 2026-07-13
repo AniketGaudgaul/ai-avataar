@@ -134,18 +134,34 @@ Produce these fields:
    - "out_of_scope": salary/compensation, personal life, private matters, or
      anything unrelated to his professional profile. Must be refused.
 
-2. `retrieval_plan` — where to look:
+2. `retrieval_plan` — where to look. The governing principle: the knowledge
+   graph holds only a SPARSE skeleton (a handful of nodes/edges per project —
+   names, dates, which tech links to which project). It does NOT hold the
+   substance: how something works, why a decision was made, architecture,
+   pipeline stages, trade-offs, results. All of that lives ONLY in the document
+   store, reachable via "vector". So:
+   - "graph": ONLY for a pure structured lookup a database row could answer, with
+     NO explanation expected — "when did he work at X", "what companies has he
+     worked at", "what overlaps between A and B", "what projects has he worked on"
+     (Person→LED→Project). If the answer needs even one sentence of "how/why",
+     it is NOT graph-only.
    - "vector": narrative/explanatory questions — search the document store.
-   - "graph": purely relational/structured questions anchored to a NAMED entity —
-     "when did he work at X", "what technologies did PROJECT Y use", "what overlaps
-     between A and B", "what projects has he worked on" (Person→LED→Project).
-     NOT for a person-level inventory of his overall skills/tech (see hybrid).
-   - "hybrid": comparative/synthesis or deep-dive questions needing both prose and
-     structured facts, AND any person-level "what does HE use / know" inventory
-     question — "which frameworks/tools/languages/models does he use", "what's his
-     tech stack", "what is he skilled at". His overall toolkit lives in a document,
-     not one hop from the person, so these need the document store, not graph alone.
-     Prefer hybrid when unsure between vector and graph.
+   - "hybrid": the DEFAULT for almost everything substantive. Use it whenever the
+     answer needs any explanation, reasoning, or detail on top of a few anchor
+     facts — this includes:
+       * EVERY deep-dive / architecture / "how does X work" / "walk me through
+         X's pipeline" / "explain X's design" question. These MUST be hybrid (or
+         vector), NEVER graph — the architecture and pipeline decisions exist only
+         in the documents; the graph would give you a few tech nodes and you'd be
+         guessing at the rest.
+       * comparative/synthesis questions needing both prose and structured facts.
+       * any person-level "what does HE use / know" inventory question — "which
+         frameworks/tools/languages/models does he use", "what's his tech stack",
+         "what is he skilled at" (his toolkit lives in a document, not one hop
+         from the person).
+     When unsure between graph and anything else, choose hybrid. A graph-only
+     plan on a question that wanted explanation is the single worst failure here:
+     it starves the answer of the documents and forces a hallucination.
    - "none": ONLY for out_of_scope.
 
 3. `search_query` — REWRITE the user's question into a clean, self-contained
@@ -198,6 +214,9 @@ Produce these fields:
    question, or a meta question. Default false.
 
 Guidelines:
+- Route→plan coupling: a "deep_dive" route ALWAYS uses "hybrid" (never "graph",
+  never "vector"-only) — an architecture/design answer needs the documents plus
+  the graph's anchor facts. A "recruiter" route uses "hybrid" too.
 - Meta → route "meta", plan "vector", answer_depth "detail", include_profile false.
 - out_of_scope → plan "none", search_query "", entities [], project_tag "",
   answer_depth "detail", visual_intent false, include_profile false.

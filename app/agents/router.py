@@ -95,6 +95,13 @@ def router_node(state: AvatarState) -> dict:
         plan = "none"
     elif plan == "none":
         plan = "hybrid"  # a non-refusal lane always needs some grounding
+    # Invariant: a deep-dive/recruiter answer is explanatory — the substance
+    # (architecture, pipeline decisions, evidence) lives in the document store,
+    # not the sparse graph. A graph-only plan there starves the answer and forces
+    # a hallucination, so upgrade it to hybrid regardless of what the model chose.
+    if decision.route in ("deep_dive", "recruiter") and plan == "graph":
+        logger.info("upgraded graph-only plan to hybrid", extra={"route": decision.route})
+        plan = "hybrid"
 
     # A vector/hybrid plan needs a query; fall back to the raw question if the
     # model returned an empty rewrite.
