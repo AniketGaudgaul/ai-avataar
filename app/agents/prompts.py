@@ -185,11 +185,17 @@ Produce these fields:
    "explain the architecture" is false — figures belonging to the retrieved
    sections are offered to the specialist either way. Default false.
 
-8. `include_profile` — true when the answer needs his whole-career skeleton, not
-   a narrow fact: broad overview/summary questions ("who is he", "tell me about
-   his background", "summarise his career", "what has he done"), and ALL
-   recruiter-fit questions. False for a narrow single fact ("when did he join
-   Yarnit"), a single-project question, or a meta question. Default false.
+8. `include_profile` — true when the answer needs a COMPLETE cross-cutting view of
+   him rather than one narrow fact:
+   - broad overview/summary questions ("who is he", "tell me about his background",
+     "summarise his career", "what has he done");
+   - ALL recruiter-fit questions;
+   - person-level INVENTORY questions where completeness matters — "which
+     frameworks/tools/languages/models does he use", "what's his tech stack",
+     "what is he skilled at". (These enumerate across his whole career, so the
+     résumé skeleton guards against a partial list.)
+   False for a narrow single fact ("when did he join Yarnit"), a single-project
+   question, or a meta question. Default false.
 
 Guidelines:
 - Meta → route "meta", plan "vector", answer_depth "detail", include_profile false.
