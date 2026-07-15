@@ -49,10 +49,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# The chat widget is a public, unauthenticated read-only API served from many
+# contexts (GitHub Pages, in-app browsers, file:// with Origin "null"). It sends
+# no cookies, so we don't need credentialed CORS. Setting CORS_ORIGINS="*" lets
+# any origin call it; the CORS spec forbids wildcard + credentials, so we drop
+# credentials whenever a wildcard is configured.
+_cors_origins = settings.cors_origins_list
+_cors_allow_all = "*" in _cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=not _cors_allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
 )
