@@ -126,13 +126,22 @@ Produce these fields:
 1. `route` — the specialist lane:
    - "factual": direct facts, explanations, comparisons/synthesis about his
      career, projects, or skills ("what companies", "how did he cut costs 70%",
-     "common thread across projects", "what projects has he worked on").
-   - "deep_dive": explain a specific project — either a general "tell me about
-     project X" OR a specific aspect ("walk me through X's architecture").
+     "common thread across projects", "what projects has he worked on"). This ALSO
+     covers STATUS-BRIEF questions — availability, how to contact/reach him, where
+     he's based, and what roles he's after ("is he available?", "how can I get in
+     touch?", "where is he based?"). These are IN SCOPE and answered from his
+     status brief — NEVER out_of_scope, never a refusal.
+   - "deep_dive": explain a specific NAMED project of his — either a general "tell
+     me about project X" OR a specific aspect ("walk me through X's architecture").
    - "recruiter": fit/suitability judgments ("good fit for a Senior GenAI role").
-   - "meta": how THIS chatbot/avatar was built ("how was this built").
-   - "out_of_scope": salary/compensation, personal life, private matters, or
-     anything unrelated to his professional profile. Must be refused.
+   - "meta": how THIS chatbot/avatar itself was built or designed — "how was this
+     built", "what guardrails does it have", "why a graph AND a vector store",
+     "the hardest engineering problem you solved building this", "your ingestion
+     pipeline". Cues: "this system/chatbot/avatar", "you built/designed", "building
+     this". A specific project OF HIS is deep_dive, not meta.
+   - "out_of_scope": salary/compensation, personal life, private matters, anything
+     unrelated to his professional profile — AND content-free turns (a bare
+     greeting, or unintelligible input). Set `oos_kind` to say which (below).
 
 2. `retrieval_plan` — where to look. The governing principle: the knowledge
    graph holds only a SPARSE skeleton (a handful of nodes/edges per project —
@@ -177,6 +186,17 @@ Produce these fields:
      retrieval architecture and design decisions").
    - Leave empty ("") only when retrieval_plan is "none" or "graph"-only.
 
+   3b. `sub_queries` — for a COMPARISON ("what overlaps between A and B", "compare
+   his research vs his production work") or an explicitly MULTI-PART question that
+   bundles several distinct sub-topics, emit 2-4 focused sub-queries — ONE per
+   entity or aspect — each self-contained and naming its own target, so each gets
+   its own strong retrieval instead of one diffuse blended query. Example, for
+   "what tech overlaps between the Agentic RAG generator and Product Discovery":
+     ["Agentic RAG Presentation Generator technology stack, frameworks and tools",
+      "Product Discovery AI Assistant technology stack, frameworks and tools"].
+   Leave EMPTY ([]) for a single-topic question — never split a focused question
+   (a plain "walk me through X's architecture" stays one `search_query`).
+
 4. `entities` — proper-noun entities named or implied (companies, projects,
    technologies, skills, publications), for the graph lookup. Resolve subject
    pronouns to "{PERSON}"; for relational questions about his career always
@@ -213,13 +233,28 @@ Produce these fields:
    False for a narrow single fact ("when did he join Yarnit"), a single-project
    question, or a meta question. Default false.
 
+9. `oos_kind` — ONLY meaningful when route is "out_of_scope"; says how to reply:
+   - "refuse": genuinely off-limits or unrelated (salary, personal life, weather,
+     "write me a script") → a polite scoped decline. This is the default.
+   - "greeting": a bare hello / small-talk opener with no question ("hi", "hey
+     there") → a warm orientation, not a refusal.
+   - "clarify": unintelligible, empty, or nonsense input ("asdfghjkl") → ask for a
+     rephrase.
+
+10. `clarification` — usually "". Set it ONLY when a question is answerable but
+   genuinely AMBIGUOUS about which project/subject it means, so answering would
+   require guessing — then put the one question you'd ask back. Example: "what does
+   the ingestion pipeline look like?" could mean one of his projects OR this avatar
+   itself → clarification: "Do you mean the ingestion pipeline of this AI avatar,
+   or one of Aniket's projects?" For a clearly-scoped question, leave it "".
+
 Guidelines:
 - Route→plan coupling: a "deep_dive" route ALWAYS uses "hybrid" (never "graph",
   never "vector"-only) — an architecture/design answer needs the documents plus
   the graph's anchor facts. A "recruiter" route uses "hybrid" too.
 - Meta → route "meta", plan "vector", answer_depth "detail", include_profile false.
 - out_of_scope → plan "none", search_query "", entities [], project_tag "",
-  answer_depth "detail", visual_intent false, include_profile false.
+  answer_depth "detail", visual_intent false, include_profile false; set oos_kind.
 - Keep `rationale` to one short sentence.
 """
 
@@ -311,4 +346,27 @@ REFUSAL_MESSAGE = (
     "skills, roles, and how this system was built, and I'll leave things like "
     "compensation or personal matters to him. Happy to get into his experience, "
     "any of his projects, or the technical decisions behind them, though."
+)
+
+# Distinct decline for a deep-dive about a project he never worked on (e.g. a
+# false-premise "walk me through the WGU Copilot he built"). Stated plainly and
+# confidently — no "the sources don't show it" hedging — then redirects to his
+# real work. Used when retrieval turns up nothing actually about the named subject.
+PROJECT_UNKNOWN_MESSAGE = (
+    f"No — that isn't one of the projects {FIRST} has worked on. I can walk you "
+    "through the ones he actually built, though — just point me at one and I'll dig in."
+)
+
+# A greeting/small-talk opener with no question — orient the visitor instead of
+# refusing or retrieving. No compensation/personal disclaimer (nothing was asked).
+GREETING_MESSAGE = (
+    f"Hey! I'm {FIRST}'s AI avatar. Ask me about his projects, skills, experience, "
+    "or how this system was built, and I'll walk you through it."
+)
+
+# Unintelligible / empty input — ask for a rephrase rather than reciting the
+# out-of-scope refusal (which name-drops compensation for no reason).
+CLARIFY_MESSAGE = (
+    "I didn't quite catch that — could you rephrase? I can tell you about "
+    f"{FIRST}'s projects, skills, experience, or how this avatar was built."
 )

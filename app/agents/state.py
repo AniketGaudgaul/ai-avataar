@@ -44,6 +44,10 @@ class AvatarState(TypedDict, total=False):
     retrieval_plan: RetrievalPlan
     router_entities: list[str]    # candidate graph entity names to resolve
     search_query: str             # rewritten/expanded query for vector search
+    # For comparison / multi-part questions: 2-4 focused sub-queries (one per
+    # entity or aspect), retrieved separately and RRF-merged so each target gets
+    # its own strong hits instead of one diffuse blended query. Empty = single query.
+    sub_queries: list[str]
     project_tag: str              # project filter ("" = no filter)
     answer_depth: AnswerDepth     # overview (gist + offer) vs detail
     visual_intent: bool           # user explicitly asked to *see* a diagram/figure
@@ -63,6 +67,18 @@ class AvatarState(TypedDict, total=False):
     # the marker it is referenced by — the model chooses, retrieval only offers
     # (see app/agents/figures.py).
     answer_images: list[ChosenFigure]
+
+    # --- Terminal direct-reply routing ---
+    # When set, the graph skips the specialist and the reply node emits a templated
+    # message keyed on the reason. Set by the router (greeting / clarify) or by
+    # retrieve (unknown_project grounding gate). Empty/absent → answer normally.
+    #   "greeting"        → GREETING_MESSAGE (a hello with no question)
+    #   "clarify"         → the `clarification` text, or CLARIFY_MESSAGE (gibberish)
+    #   "unknown_project" → PROJECT_UNKNOWN_MESSAGE (deep-dive on a non-project)
+    decline_reason: str
+    # A specific question to ask back when a query is answerable but ambiguous
+    # about which project/subject it means (paired with decline_reason "clarify").
+    clarification: str
 
     # --- Guardrail loop ---
     guardrail_verdict: dict       # {"pass": bool, "reasons": [...]}

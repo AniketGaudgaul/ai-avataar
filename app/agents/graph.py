@@ -50,11 +50,17 @@ def build_graph() -> StateGraph:
         "router", route_after_router, {"retrieve": "retrieve", "refuse": "refuse"}
     )
 
-    # Retrieve → dispatch to the specialist for the lane.
+    # Retrieve → dispatch to the specialist for the lane, or short-circuit to a
+    # confident decline when the grounding gate flags an unsupported subject.
     g.add_conditional_edges(
         "retrieve",
         route_to_specialist,
-        {"career_qa": "career_qa", "deep_dive": "deep_dive", "recruiter": "recruiter"},
+        {
+            "career_qa": "career_qa",
+            "deep_dive": "deep_dive",
+            "recruiter": "recruiter",
+            "refuse": "refuse",
+        },
     )
 
     # Every specialist flows into the guardrail.

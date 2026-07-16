@@ -13,9 +13,15 @@ vs detail — the abstract-first flow). Out-of-scope queries are forced to
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
-from app.agents.catalog import project_catalog_prompt, valid_project_tags
+from app.agents.catalog import (
+    project_catalog_prompt,
+    resolve_single_project,
+    valid_project_tags,
+)
 from app.agents.prompts import ROUTER_SYSTEM
 from app.agents.state import AnswerDepth, AvatarState, RetrievalPlan, Route
 from app.config import settings
@@ -34,6 +40,11 @@ class RouterDecision(BaseModel):
     search_query: str = Field(
         default="",
         description="Rewritten, self-contained retrieval query (not a verbatim echo).",
+    )
+    sub_queries: list[str] = Field(
+        default_factory=list,
+        description="For comparison/multi-part questions only: 2-4 focused "
+        "sub-queries, one per entity or aspect. Empty for a single-topic question.",
     )
     entities: list[str] = Field(
         default_factory=list,
@@ -55,6 +66,16 @@ class RouterDecision(BaseModel):
         description="True for broad overview/summary questions about him as a "
         "whole, and for ALL recruiter-fit questions; false for narrow single-fact, "
         "single-project, or meta questions.",
+    )
+    oos_kind: Literal["refuse", "greeting", "clarify"] = Field(
+        default="refuse",
+        description="Only meaningful for out_of_scope: refuse (off-limits/unrelated), "
+        "greeting (bare hello), or clarify (unintelligible input).",
+    )
+    clarification: str = Field(
+        default="",
+        description="A question to ask back when the query is answerable but "
+        "ambiguous about which project/subject it means; else empty.",
     )
     rationale: str = ""
 
@@ -107,11 +128,33 @@ def router_node(state: AvatarState) -> dict:
     # model returned an empty rewrite.
     search_query = decision.search_query.strip() or query
 
+    # Multi-query retrieval: keep only non-empty, distinct sub-queries, capped at 4.
+    # A lone sub-query is pointless (it's just the search_query), so require >= 2.
+    sub_queries: list[str] = []
+    seen_sq: set[str] = set()
+    for sq in decision.sub_queries:
+        s = sq.strip()
+        if s and s.lower() not in seen_sq:
+            seen_sq.add(s.lower())
+            sub_queries.append(s)
+    sub_queries = sub_queries[:4] if len(sub_queries) >= 2 else []
+
     # Reject a hallucinated project_tag not in the catalog (keeps the filter safe).
     project_tag = decision.project_tag.strip()
     if project_tag and project_tag not in valid_project_tags():
         logger.info("router dropped unknown project_tag", extra={"project_tag": project_tag})
         project_tag = ""
+
+    # Deterministic fallback: the nano router often names the project in `entities`
+    # but forgets to set `project_tag`, so a single-project deep-dive/factual query
+    # goes unfiltered and pulls other projects' chunks. When exactly one known
+    # project is named, scope to it. Skipped for recruiter/meta/broad lanes where a
+    # single-project filter would wrongly narrow a whole-profile answer.
+    if not project_tag and decision.route in ("deep_dive", "factual"):
+        inferred = resolve_single_project(decision.entities)
+        if inferred:
+            logger.info("router inferred project_tag from entities", extra={"project_tag": inferred})
+            project_tag = inferred
 
     # A recruiter read is always a whole-profile judgment, so guarantee the card
     # there even if the model forgot the flag; out-of-scope never retrieves.
@@ -120,15 +163,30 @@ def router_node(state: AvatarState) -> dict:
         and decision.route != "out_of_scope"
     )
 
+    # Terminal direct-reply routing (see AvatarState.decline_reason). An
+    # out-of-scope turn maps its kind to a message; an in-scope but ambiguous
+    # question the router chose to clarify short-circuits to that question instead
+    # of guessing which project/subject was meant.
+    clarification = decision.clarification.strip()
+    if decision.route == "out_of_scope":
+        decline_reason = {"greeting": "greeting", "clarify": "clarify"}.get(decision.oos_kind, "")
+        clarification = ""  # gibberish uses the generic template, not a model-written line
+    elif clarification:
+        decline_reason = "clarify"
+    else:
+        decline_reason = ""
+
     router_summary = {
         "route": decision.route,
         "retrieval_plan": plan,
         "search_query": search_query,
+        "sub_queries": sub_queries,
         "entities": decision.entities,
         "project_tag": project_tag,
         "answer_depth": decision.answer_depth,
         "visual_intent": decision.visual_intent,
         "include_profile": include_profile,
+        "decline_reason": decline_reason,
     }
     logger.info("router", extra=router_summary)
     span_update(input={"query": query}, output=router_summary)
@@ -136,15 +194,21 @@ def router_node(state: AvatarState) -> dict:
         "route": decision.route,
         "retrieval_plan": plan,
         "search_query": search_query,
+        "sub_queries": sub_queries,
         "router_entities": decision.entities,
         "project_tag": project_tag,
         "answer_depth": decision.answer_depth,
         "visual_intent": decision.visual_intent,
         "include_profile": include_profile,
+        "decline_reason": decline_reason,
+        "clarification": clarification,
         "retry_count": 0,
     }
 
 
 def route_after_router(state: AvatarState) -> str:
-    """Conditional edge: out-of-scope → refuse; everything else → retrieve."""
-    return "refuse" if state["route"] == "out_of_scope" else "retrieve"
+    """Conditional edge: out-of-scope or a router-issued direct reply
+    (greeting / clarify) → the reply node; everything else → retrieve."""
+    if state["route"] == "out_of_scope" or state.get("decline_reason"):
+        return "refuse"
+    return "retrieve"

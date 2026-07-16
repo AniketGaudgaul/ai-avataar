@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from app.agents.prompts import persona_present
+from app.agents.prompts import persona_present, persona_text
 from app.agents.state import AvatarState
 from app.core.logging import get_logger
 from app.core.tracing import observe, span_update
@@ -99,6 +99,42 @@ def _looks_like_decline(answer: str) -> bool:
     return any(m in low for m in _DECLINE_MARKERS)
 
 
+# Short generic words that don't signal a claim beyond the brief; excluded so the
+# coverage ratio measures *substantive* overlap, not filler.
+_STOPWORDS = frozenset({
+    "and", "the", "for", "his", "her", "him", "she", "they", "that", "this",
+    "with", "from", "have", "has", "into", "here", "there", "then", "than",
+    "about", "also", "just", "some", "what", "when", "where", "which", "would",
+    "could", "should", "been", "being", "does", "done", "over", "under", "more",
+    "very", "aniket",  # the subject's own name says nothing about grounding
+})
+_WORD_RE = re.compile(r"[a-z][a-z0-9'+.-]{2,}")
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Substantive lowercased words in `text`, with [n] markers and filler removed."""
+    stripped = _MARKER_RE.sub(" ", text.lower())
+    return {w for w in _WORD_RE.findall(stripped) if w not in _STOPWORDS}
+
+
+def _persona_covered(answer: str) -> bool:
+    """True when the answer is essentially a restatement of the status brief.
+
+    The brief (persona.md) is always-on grounding that carries no [n] markers by
+    design, so an answer built from it (location / availability / contact / target
+    roles) must not be forced to cite — even when retrieval also returned facts.
+    A genuine RAG answer introduces many project/tech terms absent from the brief,
+    so its coverage ratio stays well below the threshold and it still needs a
+    citation. This is the exemption check #1's comment always intended, keyed on
+    *content* rather than on whether retrieval happened to fire.
+    """
+    ans = _content_tokens(answer)
+    persona = _content_tokens(persona_text())
+    if not ans or not persona:
+        return False
+    return len(ans & persona) / len(ans) >= 0.7
+
+
 @observe(name="guardrail", as_type="guardrail", capture_input=False, capture_output=False)
 def guardrail_node(state: AvatarState) -> dict:
     """Validate the draft answer; return {"pass": bool, "reasons": [...]}."""
@@ -110,14 +146,18 @@ def guardrail_node(state: AvatarState) -> dict:
     has_citation = bool(_MARKER_RE.search(answer))
     is_decline = _looks_like_decline(answer)
     # The always-on status brief is grounding too, but its facts carry no [n]
-    # marker — so it lets an answer stand without retrieval, yet never satisfies
-    # the citation requirement for retrieved facts.
+    # marker. `has_persona` lets an answer stand when nothing was retrieved;
+    # `persona_covered` additionally exempts a brief-only answer from the citation
+    # requirement even when retrieval *did* fire (e.g. "Where is he based?" pulls
+    # graph facts yet is answered from the brief), so a correct persona answer is
+    # no longer rejected and refused.
     has_persona = persona_present()
+    persona_covered = has_persona and _persona_covered(answer)
 
     reasons: list[str] = []
 
-    # 1. Retrieved claims must cite (status-brief-only answers are exempt).
-    if has_rag and not has_citation and not is_decline:
+    # 1. Retrieved claims must cite (answers grounded in the status brief are exempt).
+    if has_rag and not has_citation and not is_decline and not persona_covered:
         reasons.append("Answer states facts but includes no [n] citation markers.")
 
     # 2. Nothing to answer from (no retrieval, no status brief) → must decline.
@@ -126,21 +166,31 @@ def guardrail_node(state: AvatarState) -> dict:
             "No sources were retrieved, but the answer asserts facts instead of declining."
         )
 
-    # 3. Out-of-scope leakage.
-    leaked = [t for t in _BANNED_TERMS if t in low]
+    # 3. Out-of-scope leakage. Skipped on the meta lane: a "what guardrails does
+    #    this have?" answer legitimately *names* compensation/personal as topics the
+    #    system refuses, which is a description, not a disclosure about him.
+    leaked = [t for t in _BANNED_TERMS if t in low] if route != "meta" else []
     if leaked:
         reasons.append(f"Answer surfaces out-of-scope topic(s): {', '.join(leaked)}.")
 
     # 4. Recruiter answers must frame themselves as a read on the evidence, not a
     #    guarantee — accept any natural hedge, not just the word "projection".
-    if route == "recruiter" and not any(h in low for h in _HEDGE_MARKERS):
+    #    A status-brief answer that happens to land in the recruiter lane (e.g.
+    #    "is he available?") is a plain fact from the brief, not a fit-judgement, so
+    #    a persona-covered answer is exempt from the hedge requirement.
+    if route == "recruiter" and not persona_covered and not any(h in low for h in _HEDGE_MARKERS):
         reasons.append("Recruiter-fit answer doesn't frame itself as a read on the evidence.")
 
     verdict = {"pass": not reasons, "reasons": reasons}
     logger.info("guardrail", extra={"pass": verdict["pass"], "reasons": reasons, "route": route})
     span_update(
         output={"pass": verdict["pass"], "reasons": reasons, "route": route},
-        metadata={"has_rag": has_rag, "has_persona": has_persona, "has_citation": has_citation},
+        metadata={
+            "has_rag": has_rag,
+            "has_persona": has_persona,
+            "persona_covered": persona_covered,
+            "has_citation": has_citation,
+        },
     )
     return {"guardrail_verdict": verdict}
 

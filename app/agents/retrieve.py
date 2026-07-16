@@ -17,6 +17,11 @@ of them belongs in the answer (see `app/agents/figures.py`).
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
+from functools import lru_cache
+
+from app.agents.catalog import get_project_catalog, resolve_single_project
 from app.agents.context import assemble_context
 from app.agents.figures import loadable
 from app.agents.profile import PROFILE_CARD
@@ -25,7 +30,7 @@ from app.config import settings
 from app.core.logging import get_logger
 from app.core.tracing import observe, span_update
 from app.retrieval.graph import facts_for_entities
-from app.retrieval.schema import RetrievedImage
+from app.retrieval.schema import GraphFact, RetrievedContext, RetrievedImage
 from app.retrieval.vector import images_for_retrieved, retrieve_images
 from app.retrieval.vector import retrieve as vector_retrieve
 
@@ -35,6 +40,134 @@ logger = get_logger(__name__)
 # material (spec 7.1: meta folds into Career Q&A with a source filter).
 _META_SOURCE_TYPE = "how_i_built_this"
 
+# Tokens too generic to prove a named subject was actually retrieved — a deep-dive
+# entity like "WGU Copilot" must match on a distinctive token ("wgu"/"copilot"),
+# not on "project"/"system" appearing in some other project's chunk.
+_SUBJECT_STOPWORDS = frozenset({
+    "project", "projects", "system", "systems", "app", "application", "the", "and",
+    "for", "his", "her", "with", "into", "using", "based", "built", "work", "tool",
+    "platform", "pipeline", "model", "assistant", "generator", "research",
+})
+_SUBJECT_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _subject_tokens(text: str) -> list[str]:
+    """Distinctive lowercased tokens of a subject/project name (drops filler)."""
+    return [
+        t for t in _SUBJECT_TOKEN_RE.findall(text.lower())
+        if len(t) >= 3 and t not in _SUBJECT_STOPWORDS
+    ]
+
+
+@lru_cache
+def _known_project_terms() -> frozenset[str]:
+    """Distinctive tokens of every known project's name + tag (the catalog is the
+    authority on which projects he actually worked on)."""
+    terms: set[str] = set()
+    for p in get_project_catalog():
+        terms.update(_subject_tokens(f"{p.get('name', '')} {p.get('id', '')}"))
+    return frozenset(terms)
+
+
+def _subject_unsupported(
+    state: AvatarState,
+    contexts: list[RetrievedContext],
+    graph_facts: list[GraphFact],
+) -> bool:
+    """True when a deep-dive names a project he never worked on.
+
+    Guards against confidently fabricating an architecture for a non-existent
+    project (e.g. "walk me through the WGU Copilot he built"): retrieval always
+    returns *some* top-k, so the specialist would otherwise write about whatever
+    off-topic chunks came back. Scoped to deep_dive (the fabrication-prone lane)
+    and deliberately conservative — it fires only when EVERY named subject is
+    neither (a) a known catalog project nor (b) mentioned in real evidence, so any
+    genuine project question proceeds.
+
+    Real evidence excludes the "How I Built This" meta doc, which name-drops other
+    projects as example queries ("overlap between the hackathon project and WGU
+    Copilot") — counting those would mask a bogus subject.
+    """
+    if state.get("route") != "deep_dive":
+        return False
+    person = settings.avatar_person_name.strip().lower()
+    subjects = [
+        e for e in state.get("router_entities", [])
+        if e.strip() and e.strip().lower() != person
+    ]
+    if not subjects:
+        return False  # no specific subject to verify → nothing to gate on
+
+    known = _known_project_terms()
+    real_evidence = " ".join(
+        [c.text for c in contexts if c.source_type != _META_SOURCE_TYPE]
+        + [c.heading_path for c in contexts if c.source_type != _META_SOURCE_TYPE]
+        + [c.citation_label for c in contexts if c.source_type != _META_SOURCE_TYPE]
+        + [f.as_sentence() for f in graph_facts]
+    ).lower()
+
+    for subject in subjects:
+        tokens = _subject_tokens(subject) or [subject.strip().lower()]
+        supported = any(t in known for t in tokens) or any(t in real_evidence for t in tokens)
+        if supported:
+            return False  # at least one named subject is a real project → proceed
+    return True
+
+
+def _retrieve_one(
+    query: str,
+    *,
+    source_type: str | None,
+    project_tag: str | None,
+) -> tuple[list[RetrievedContext], str | None]:
+    """One vector query with the project_tag-miss fallback.
+
+    Returns `(contexts, effective_tag)` — `effective_tag` is None when the filter
+    matched nothing and we fell back to unfiltered, so the caller can un-scope the
+    figure pass to match. A project_tag that matches no chunks must not starve the
+    answer: the project may exist in the graph but have no (or differently-tagged)
+    documents — e.g. the ECIR paper is a Publication with an empty tag, so a query
+    scoped to `medsumm-research` filtered to zero."""
+    contexts = vector_retrieve(
+        query, limit=settings.agent_max_contexts, source_type=source_type, project_tag=project_tag
+    )
+    if not contexts and project_tag:
+        logger.info(
+            "project_tag filter matched no chunks; retrying unfiltered",
+            extra={"project_tag": project_tag, "query_chars": len(query)},
+        )
+        contexts = vector_retrieve(
+            query, limit=settings.agent_max_contexts, source_type=source_type, project_tag=None
+        )
+        return contexts, None
+    return contexts, project_tag
+
+
+def _multi_retrieve(
+    sub_queries: list[str],
+    *,
+    source_type: str | None,
+    shared_tag: str | None,
+) -> list[RetrievedContext]:
+    """Retrieve each sub-query separately, then RRF-merge into one ranked list.
+
+    Each sub-query auto-scopes to its own project when it names exactly one (so a
+    comparison across A and B fetches A's chunks for A's query and B's for B's,
+    instead of one blended query returning a diffuse mix); otherwise it inherits
+    the shared tag. Fusing by rank (Reciprocal Rank Fusion) needs no score
+    normalization across the independent queries."""
+    K = 60  # RRF damping; standard choice
+    fused: dict[str, float] = defaultdict(float)
+    best: dict[str, RetrievedContext] = {}
+    for q in sub_queries:
+        tag = resolve_single_project([q]) or shared_tag
+        ctxs, _ = _retrieve_one(q, source_type=source_type, project_tag=tag)
+        for rank, ctx in enumerate(ctxs):
+            fused[ctx.parent_section_id] += 1.0 / (K + rank)
+            best.setdefault(ctx.parent_section_id, ctx)
+    ranked = sorted(best.values(), key=lambda c: fused[c.parent_section_id], reverse=True)
+    return ranked[: settings.agent_max_contexts]
+
 
 @observe(name="retrieve", as_type="retriever", capture_input=False, capture_output=False)
 def retrieve_node(state: AvatarState) -> dict:
@@ -42,6 +175,7 @@ def retrieve_node(state: AvatarState) -> dict:
     plan = state["retrieval_plan"]
     # Use the router's rewritten query for vector search (falls back to raw).
     search_query = state.get("search_query") or state["query"]
+    sub_queries = state.get("sub_queries") or []
     route = state["route"]
     project_tag = state.get("project_tag") or None
 
@@ -51,28 +185,14 @@ def retrieve_node(state: AvatarState) -> dict:
 
     if plan in ("vector", "hybrid"):
         source_type = _META_SOURCE_TYPE if route == "meta" else None
-        contexts = vector_retrieve(
-            search_query,
-            limit=settings.agent_max_contexts,
-            source_type=source_type,
-            project_tag=project_tag,
-        )
-        # A project_tag that matches no chunks must not cause a false refusal:
-        # the project may exist in the graph but have no (or differently-tagged)
-        # documents — e.g. the ECIR paper is a Publication with an empty tag, so a
-        # query the router scoped to `medsumm-research` filtered to zero. Fall back
-        # to unfiltered retrieval, and un-scope the figure pass with it.
-        if not contexts and project_tag:
-            logger.info(
-                "project_tag filter matched no chunks; retrying unfiltered",
-                extra={"project_tag": project_tag},
+        if len(sub_queries) >= 2:
+            # Comparison / multi-part: retrieve each sub-query and RRF-merge.
+            contexts = _multi_retrieve(
+                sub_queries, source_type=source_type, shared_tag=project_tag
             )
-            project_tag = None
-            contexts = vector_retrieve(
-                search_query,
-                limit=settings.agent_max_contexts,
-                source_type=source_type,
-                project_tag=None,
+        else:
+            contexts, project_tag = _retrieve_one(
+                search_query, source_type=source_type, project_tag=project_tag
             )
         images = _figures_for(
             contexts,
@@ -94,6 +214,16 @@ def retrieve_node(state: AvatarState) -> dict:
         contexts, graph_facts, profile_card=profile_card
     )
 
+    # Grounding gate: a deep-dive about a subject absent from all evidence gets a
+    # confident decline rather than a fabricated answer (see _subject_unsupported).
+    decline_reason = ""
+    if _subject_unsupported(state, contexts, graph_facts):
+        decline_reason = "unknown_project"
+        logger.info(
+            "grounding gate: named subject unsupported by evidence; declining",
+            extra={"entities": state.get("router_entities"), "route": state.get("route")},
+        )
+
     logger.info(
         "retrieve",
         extra={
@@ -102,6 +232,7 @@ def retrieve_node(state: AvatarState) -> dict:
             "graph_facts": len(graph_facts),
             "citations": len(citations),
             "images": len(images),
+            "decline_reason": decline_reason,
         },
     )
     span_update(
@@ -119,6 +250,7 @@ def retrieve_node(state: AvatarState) -> dict:
         "citations": citations,
         "context_block": context_block,
         "retrieved_images": images,
+        "decline_reason": decline_reason,
     }
 
 
@@ -159,8 +291,11 @@ def _figures_for(
 
 
 def route_to_specialist(state: AvatarState) -> str:
-    """Conditional edge after retrieve: dispatch to the specialist for the lane.
-    Meta folds into Career Q&A (spec 7.1)."""
+    """Conditional edge after retrieve: dispatch to the specialist for the lane,
+    unless the grounding gate flagged an unsupported subject → refuse (a confident
+    decline, not a fabricated answer). Meta folds into Career Q&A (spec 7.1)."""
+    if state.get("decline_reason"):
+        return "refuse"
     return _SPECIALIST_FOR_ROUTE.get(state["route"], "career_qa")
 
 
