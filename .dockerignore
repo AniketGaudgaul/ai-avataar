@@ -16,6 +16,7 @@ dist/
 .env
 .env.*
 !.env.example
+deploy/cloud-run.env.yaml
 
 # Index-building inputs and intermediates. The container serves an index that
 # already exists in Qdrant/Neo4j; it never rebuilds one.

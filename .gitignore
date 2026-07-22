@@ -18,6 +18,8 @@ env/
 .env
 .env.*
 !.env.example
+# Cloud Run env file holds real API keys — never commit it
+deploy/cloud-run.env.yaml
 
 # Data / artifacts (source docs and generated indexes are large / private)
 data/

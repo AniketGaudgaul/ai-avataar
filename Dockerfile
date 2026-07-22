@@ -1,8 +1,10 @@
 # Multi-stage build (spec 9: Docker multi-stage). Stage 1 builds a wheel-based
 # virtualenv and warms the BM25 model cache; stage 2 is a slim runtime image.
 #
-# Build context is the repo root, not this directory:
-#     docker build -f docker/Dockerfile .
+# This Dockerfile lives at the repo root so its build context is the repo root:
+#     docker build -f Dockerfile .
+# (Cloud Run's "deploy from repository" uses the Dockerfile's directory as the
+# build context, so a root Dockerfile is what lets COPY see pyproject/app/assets.)
 #
 # Only the runtime dependency set is installed — not the `[ingest]` extra. The
 # index is built on the dev box (LlamaParse, SVG rasterisation, embedding); this
